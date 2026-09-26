@@ -1,1 +1,1 @@
-acs_reset_connection(60);
+acs_reset_connection(acs_retry_delay);

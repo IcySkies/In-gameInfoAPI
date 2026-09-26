@@ -11,8 +11,13 @@
   },
   {
     "Entry": "gml_Object_o_songselect_Draw_0",
-    "ExternalFile": "emit_selection.gml",
+    "ExternalFile": "emit_chart_info.gml",
     "Type": 2
+  },
+  {
+    "Entry": "gml_Object_o_songselect_newconfirm_Create_0",
+    "ExternalFile": "emit_selection_confirm.gml",
+    "Type": 3
   },
   {
     "Entry": "gml_Object_obj_multiplayer_lobby_Step_0",

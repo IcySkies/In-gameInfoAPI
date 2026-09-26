@@ -1,6 +1,55 @@
-# AutoChartSwitch Game Bridge v2.0.0
+# vivid/stasis In-game Information API
 
-This mod emits highlighted chart selection, Worldcross lobby decisions, chart
+The vivid/stasis In-game Information API is the authoritative realtime game
+information source for vivid/stasis integrations. It currently publishes
+highlighted chart info, confirmed selection, Worldcross lobby decisions, chart loading, gameplay start,
+chart-exit transition, and gameplay-end information over the legacy
+AutoChartSwitch Game Bridge transport.
+
+The legacy name and wire contract are intentionally retained so existing
+consumers, including AutoChartSwitchV2 and AutoChartFill, continue to work
+without changes.
+
+## Compatibility contract
+
+- Transport remains an outbound raw TCP connection from GameMaker to
+  `127.0.0.1:28745` by default.
+- Frames remain little-endian, 32-bit length-prefixed UTF-8 JSON.
+- `protocolVersion` remains `1`.
+- Existing lifecycle and lobby event kinds remain unchanged; `ChartInfo` adds
+  highlight snapshots and `Selection` confirms the latest snapshot.
+- New envelope properties (`sessionId`, `eventId`, `state`, `game`,
+  `capabilities`, `replay`, and diagnostics) are optional extensions.
+
+## Delivery guarantees
+
+The API keeps a bounded in-game event journal. Events created while the
+consumer is unavailable are queued and flushed in sequence order after a
+reconnect. Repeated chart-info snapshots are coalesced; lifecycle events are
+preserved preferentially. If the queue reaches its limit, the oldest
+non-lifecycle event is discarded and the next envelope reports the dropped
+event count. The latest state and chart snapshot are replayed after reconnect.
+
+The transport is asynchronous and never blocks the game thread. Retry delay
+uses bounded backoff and resets after a successful connection.
+
+## State model
+
+The optional `state` property reports `Idle`, `Selection`, `Lobby`, `Loading`,
+`Gameplay`, `Exiting`, or `Ended`. State changes are idempotent at the hook
+boundary, so duplicate room or transition callbacks do not create duplicate
+lifecycle effects in consumers.
+
+## Future extensions
+
+The capability list and optional envelope properties provide the compatibility
+surface for future gameplay telemetry such as score, combo, judgement, gauge,
+and progress. Those additions should use new optional payload fields or a
+coordinated protocol version rather than changing the existing event meanings.
+
+## Legacy bridge behavior
+
+This mod emits highlighted chart info and a chartless confirmed selection marker, Worldcross lobby decisions, chart
 loading, gameplay start, chart-exit transition, and gameplay exit events to
 AutoChartSwitch V2 over a raw localhost TCP connection. Worldcross decisions
 are emitted both when the local player sends a choice and when a choice is
@@ -19,7 +68,14 @@ The exit event that switches OBS scenes is emitted when the guarded
 `o_transition_diamond` chart-exit transition is created. A gameplay exit that
 does not show that transition only resets lifecycle state.
 
-Supported game version: vivid/stasis 6.2.2.2 [F3D3B703]. The app listens on
+In single-player song select, `ChartInfo` is emitted when the highlighted
+song/difficulty changes. Pressing Confirm emits a chartless `Selection` marker;
+consumers associate it with the most recent `ChartInfo`. AutoChartSwitch uses
+that marker to update live OBS output, while AutoChartFill records each received
+`ChartInfo` while recording. On reconnect, the mod replays `ChartInfo` followed
+by `Selection` when the latest highlight was confirmed.
+
+Supported game version: vivid/stasis 6.2.2.2 [F3D3B703]. The relay listens on
 port 28745 by default. A `AutoChartSwitchV2/bridge.ini` file in the game
 working directory can override the port:
 
@@ -41,13 +97,20 @@ jackets are never loaded or rendered by the game.
 Events include raw and optional formatted variants for title, artist, charter,
 and illustrator so the desktop app can select text compatible with its OBS font.
 
-The loader processes this package before the existing alphabetical mod names;
-its patches use insertion points that remain valid when the later song and
-gameplay mods are applied. The app writes the port file under the configured
+The installed package is named `VividStasisGameInfoAPI v3.0.0`. The loader
+processes it in its alphabetical position after the existing gameplay mods;
+its patches use stable object and code anchors and the loader log must confirm
+that every patch applies. The app writes the port file under the configured
 game path.
 
-The game uses GameMaker's raw asynchronous TCP connection because the app is a
-.NET listener rather than another GameMaker game. Connection attempts never
-block the game thread. The game and app can be started in either order. When
-the app starts or restarts, the mod reconnects and sends its latest chart and
-lifecycle state.
+The game uses GameMaker's raw asynchronous TCP connection to the required local
+relay. The relay fans frames out to all desktop subscribers. Connection
+attempts never block the game thread; the game and relay can be started in
+either order. When the relay starts or restarts, the mod reconnects and sends
+its latest chart and lifecycle state. If the relay is unavailable, the mod
+shows an in-game warning until the connection recovers.
+
+Worldcross telemetry is published as additive `WorldcrossRoom` and
+`WorldcrossGameplay` events. The optional `worldcross.players` array contains
+non-NPC members with their SteamID64, name, readiness/play state, rating,
+numeric class, live score, finalized last-play score, and FC/AC/VS label.
