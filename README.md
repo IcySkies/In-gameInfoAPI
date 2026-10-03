@@ -52,14 +52,21 @@ coordinated protocol version rather than changing the existing event meanings.
 This mod emits highlighted chart info and a chartless confirmed selection marker, Worldcross lobby decisions, chart
 loading, gameplay start, chart-exit transition, and gameplay exit events to
 AutoChartSwitch V2 over a raw localhost TCP connection. Worldcross decisions
-are emitted both when the local player sends a choice and when a choice is
-received from another client.
+are observed from the settled lobby queue for both local and remote choices.
+Packet encoding is left to the game and other mods; unresolved custom charts
+are not published until their chart ID resolves to a local song.
 
 Before publishing a Worldcross decision, the bridge runs the game's native
 `GetSongStats` calculation for the chosen song and difficulty. This keeps all
 six tech statistics aligned with the title, credits, difficulty, and jacket;
 if chart details cannot be loaded, the event reports zeroes instead of stale
 statistics from the previously viewed song.
+The calculation lets the native function initialize its outputs without
+requiring preexisting stat globals or the unused `ss_notecount` global.
+It saves and restores existing stats, totals, temporary levels, and the
+`has_mods` flag; events read a private copy. Loading and gameplay-start
+snapshots calculate stats for their current chart rather than copying
+potentially stale selector globals.
 
 The chart loading event is emitted when `o_transitionsong` is created. It
 triggers the Auto-Switch entry scene before the gameplay room is created;
@@ -108,7 +115,8 @@ relay. The relay fans frames out to all desktop subscribers. Connection
 attempts never block the game thread; the game and relay can be started in
 either order. When the relay starts or restarts, the mod reconnects and sends
 its latest chart and lifecycle state. If the relay is unavailable, the mod
-shows an in-game warning until the connection recovers.
+logs a nonblocking warning and retries. While VS Online's WebSocket is
+connecting, the bridge defers its TCP connection attempt.
 
 Worldcross telemetry is published as additive `WorldcrossRoom` and
 `WorldcrossGameplay` events. The optional `worldcross.players` array contains

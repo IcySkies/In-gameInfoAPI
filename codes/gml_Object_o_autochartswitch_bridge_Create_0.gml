@@ -17,6 +17,7 @@ acs_last_chart_info_key = "";
 acs_selection_confirmed = false;
 acs_last_sent_key = "";
 acs_last_lobby_key = "";
+acs_last_lobby_song = undefined;
 acs_last_room_signature = "";
 acs_last_gameplay_signature = "";
 acs_last_play_scores = [];
@@ -28,6 +29,7 @@ acs_source = "vivid/stasis";
 acs_capabilities = ["chart-selection", "worldcross-selection", "worldcross-room", "worldcross-gameplay", "lifecycle", "tech-stats", "jacket-export"];
 acs_relay_warning = false;
 acs_warning_shown = false;
+acs_stats = {};
 
 acs_reset_connection = function(_retrySteps)
 {
@@ -39,7 +41,7 @@ acs_reset_connection = function(_retrySteps)
     if (!acs_warning_shown)
     {
         acs_warning_shown = true;
-        show_message("VividStasis game information relay is unavailable!");
+        show_debug_message("VividStasis game information relay is unavailable; retrying in the background.");
     }
     if (acs_socket >= 0)
     {
@@ -173,50 +175,38 @@ acs_global_number = function(_name, _fallback)
 
 acs_refresh_tech_stats = function(_song, _rawDifficulty)
 {
-    global.note_stat = 0;
-    global.tech_stat = 0;
-    global.speed_stat = 0;
-    global.multi_stat = 0;
-    global.fill_stat = 0;
-    global.gimmick_stat = 0;
-
-    var _chartId = "";
-    if (is_struct(_song))
+    var _names = ["note_stat", "tech_stat", "speed_stat", "multi_stat", "fill_stat", "gimmick_stat",
+        "stat_total", "stat_total_v2", "stat_total_v3", "temp_level_note", "temp_level_speed",
+        "temp_level_tech", "temp_level_multi", "has_mods"];
+    var _original = [];
+    var _existed = [];
+    acs_stats = {};
+    // GetSongStats initializes its outputs itself. ss_notecount is not a
+    // prerequisite in 6.2.2.2; requiring it skips every normal selection.
+    for (var _i = 0; _i < array_length(_names); _i++)
     {
-        if (variable_struct_exists(_song, "chart_id"))
-            _chartId = variable_struct_get(_song, "chart_id");
-        else if (variable_struct_exists(_song, "song_id"))
-            _chartId = variable_struct_get(_song, "song_id");
+        var _exists = variable_global_exists(_names[_i]);
+        array_push(_existed, _exists);
+        array_push(_original, _exists ? variable_global_get(_names[_i]) : undefined);
+        if (_exists && _i < 6) variable_global_set(_names[_i], 0);
     }
-
-    // BACKSTAGE reuses the ENCORE chart data internally. Keep BACKSTAGE as
-    // the published label, but calculate stats against the ENCORE source.
-    var _statsDifficulty = string_upper(string(_rawDifficulty)) == "BACKSTAGE" ? "ENCORE" : _rawDifficulty;
-    var _noteCount = 0;
-    if (string_length(string(_chartId)) > 0)
+    try
     {
-        try { _noteCount = max(0, real(LoadSongDataNoteCount(_chartId, _statsDifficulty))); }
-        catch (e) { _noteCount = 0; }
+        var _statsDifficulty = string_upper(string(_rawDifficulty)) == "BACKSTAGE" ? "ENCORE" : _rawDifficulty;
+        GetSongStats(_song, _statsDifficulty);
+        for (var _k = 0; _k < 6; _k++)
+            variable_struct_set(acs_stats, _names[_k], acs_global_number(_names[_k], 0));
     }
-
-    // GetSongStats relies on the selector's note-count global for Shatter
-    // charts. Do not force calculation for missing or empty chart files.
-    if (_noteCount > 0) global.ss_notecount = _noteCount;
-
-    try { GetSongStats(_song, _statsDifficulty); }
-    catch (e) { }
-
-    var _calculated = abs(acs_global_number("note_stat", 0)) > 0
-        || abs(acs_global_number("tech_stat", 0)) > 0
-        || abs(acs_global_number("speed_stat", 0)) > 0
-        || abs(acs_global_number("multi_stat", 0)) > 0
-        || abs(acs_global_number("fill_stat", 0)) > 0
-        || abs(acs_global_number("gimmick_stat", 0)) > 0;
-    if (!_calculated && _noteCount > 0)
+    catch (e) { acs_stats = {}; }
+    for (var _r = 0; _r < array_length(_names); _r++)
     {
-        try { GetSongStats(_song, _statsDifficulty); }
-        catch (e) { }
+        if (_existed[_r]) variable_global_set(_names[_r], _original[_r]);
     }
+};
+
+acs_stat = function(_name)
+{
+    return variable_struct_exists(acs_stats, _name) ? variable_struct_get(acs_stats, _name) : 0;
 };
 
 acs_song_value = function(_song, _name, _difficultyIndex, _fallback)
@@ -254,6 +244,7 @@ acs_difficulty_name = function(_index, _backstage)
         case 1: return "MIDDLE";
         case 2: return "FINALE";
         case 3: return _backstage ? "BACKSTAGE" : "ENCORE";
+        case 4: return "PRELUDE";
         default: return "OPENING";
     }
 };
@@ -266,6 +257,7 @@ acs_difficulty_index = function(_rawDifficulty)
         case "FINALE": return 2;
         case "ENCORE": return 3;
         case "BACKSTAGE": return 3;
+        case "PRELUDE": return 4;
         default: return 0;
     }
 };
@@ -313,7 +305,7 @@ acs_export_jacket = function(_song, _difficultyIndex, _chartId, _rawDifficulty)
     var _sprite = -1;
     try { _sprite = song_get_info(_song, "jacket", _difficultyIndex); }
     catch (e) { _sprite = acs_song_value(_song, "jacket", _difficultyIndex, -1); }
-    if (_sprite == song_generic) return "";
+    if (_sprite == song_generic || !sprite_exists(_sprite)) return "";
 
     var _surface = -1;
     try { _surface = surface_create(500, 500); }
@@ -370,7 +362,7 @@ acs_chart_snapshot = function(_song, _rawDifficulty, _difficultyIndex)
 {
     if (!is_struct(_song)) _song = {};
     if (is_undefined(_difficultyIndex)) _difficultyIndex = 0;
-    _difficultyIndex = clamp(floor(_difficultyIndex), 0, 3);
+    _difficultyIndex = clamp(floor(_difficultyIndex), 0, 4);
 
     var _chartId = variable_struct_exists(_song, "chart_id") ? variable_struct_get(_song, "chart_id") : (variable_struct_exists(_song, "song_id") ? variable_struct_get(_song, "song_id") : "");
     var _title = acs_song_value(_song, "name", _difficultyIndex, "");
@@ -404,7 +396,9 @@ acs_chart_snapshot = function(_song, _rawDifficulty, _difficultyIndex)
                 _formattedCharter = variable_struct_get(_encoreData, "formatted_note_designer");
         }
     }
-    var _jacket = acs_export_jacket(_song, _difficultyIndex, _chartId, _rawDifficulty);
+    var _jacket = "";
+    try { _jacket = acs_export_jacket(_song, _difficultyIndex, _chartId, _rawDifficulty); }
+    catch (e) { }
 
     return {
         chartId: _chartId,
@@ -421,12 +415,12 @@ acs_chart_snapshot = function(_song, _rawDifficulty, _difficultyIndex)
         difficultyNumber: acs_safe_number(_difficultyNumber, 0),
         jacketPath: _jacket,
         techStats: {
-            chip: acs_global_number("note_stat", 0),
-            tech: acs_global_number("tech_stat", 0),
-            stream: acs_global_number("speed_stat", 0),
-            chord: acs_global_number("multi_stat", 0),
-            burst: acs_global_number("fill_stat", 0),
-            gimmick: acs_global_number("gimmick_stat", 0)
+            chip: acs_stat("note_stat"),
+            tech: acs_stat("tech_stat"),
+            stream: acs_stat("speed_stat"),
+            chord: acs_stat("multi_stat"),
+            burst: acs_stat("fill_stat"),
+            gimmick: acs_stat("gimmick_stat")
         }
     };
 };
@@ -563,14 +557,14 @@ acs_emit_worldcross_snapshot = function(_gameplay)
     if (_gameplay)
     {
         if (_signature == acs_last_gameplay_signature) return;
-        acs_last_gameplay_signature = _signature;
         SendTelemetry("WorldcrossGameplay", _worldcross);
+        acs_last_gameplay_signature = _signature;
     }
     else
     {
         if (_signature == acs_last_room_signature) return;
-        acs_last_room_signature = _signature;
         SendTelemetry("WorldcrossRoom", _worldcross);
+        acs_last_room_signature = _signature;
     }
 };
 
@@ -617,7 +611,7 @@ EmitLobbySelection = function(_song, _difficultyIndex)
     if (!is_struct(_song)) _song = {};
     var _requestedDifficulty = floor(_difficultyIndex);
     var _raw = acs_song_difficulty_name(_song, _requestedDifficulty, false);
-    _difficultyIndex = clamp(_requestedDifficulty, 0, 3);
+    _difficultyIndex = clamp(_requestedDifficulty, 0, 4);
     acs_refresh_tech_stats(_song, _raw);
     var _chart = acs_chart_snapshot(_song, _raw, _difficultyIndex);
     acs_last_chart = _chart;
@@ -631,34 +625,83 @@ EmitLobbySelection = function(_song, _difficultyIndex)
 
 EmitLobbySelectionFromChoice = function(_choice)
 {
+    var _previousKey = acs_last_lobby_key;
+    var _previousSong = acs_last_lobby_song;
+    acs_last_lobby_key = "";
+    acs_last_lobby_song = undefined;
     if (!is_struct(_choice)) return;
     var _songId = variable_struct_exists(_choice, "songId") ? variable_struct_get(_choice, "songId") : -1;
     var _difficulty = variable_struct_exists(_choice, "difficulty") ? variable_struct_get(_choice, "difficulty") : 0;
-    var _song = {};
-    var _isShatterChoice = _difficulty < 0;
-    try
+    if (!is_real(_difficulty) || _difficulty != _difficulty) return;
+    var _song = undefined;
+    var _chartId = variable_struct_exists(_choice, "chart_id") && !is_undefined(_choice.chart_id) ? string(_choice.chart_id) : "";
+    if (_chartId == "generic") _chartId = "";
+    if (_chartId != "")
     {
-        if (_isShatterChoice && variable_global_exists("shatter_list"))
-            _song = global.shatter_list[_songId];
-        else if (variable_global_exists("song_list"))
-            _song = global.song_list[_songId];
+        var _lists = [];
+        if (variable_global_exists("song_list") && is_array(global.song_list)) array_push(_lists, global.song_list);
+        if (variable_global_exists("shatter_list") && is_array(global.shatter_list)) array_push(_lists, global.shatter_list);
+        if (is_real(_songId) && _songId >= 0 && _songId == floor(_songId))
+        {
+            for (var _k = 0; _k < array_length(_lists); _k++)
+            {
+                var _indexed = _lists[_k];
+                if (_songId < array_length(_indexed) && is_struct(_indexed[_songId])
+                    && variable_struct_exists(_indexed[_songId], "chart_id")
+                    && string_lower(string(_indexed[_songId].chart_id)) == string_lower(_chartId))
+                {
+                    _song = _indexed[_songId];
+                    break;
+                }
+            }
+        }
+        for (var _l = 0; _l < array_length(_lists) && is_undefined(_song); _l++)
+        {
+            var _list = _lists[_l];
+            for (var _i = 0; _i < array_length(_list); _i++)
+            {
+                var _candidate = _list[_i];
+                if (is_struct(_candidate) && variable_struct_exists(_candidate, "chart_id")
+                    && string_lower(string(variable_struct_get(_candidate, "chart_id"))) == string_lower(_chartId))
+                {
+                    _song = _candidate;
+                    break;
+                }
+            }
+        }
     }
-    catch (e) { _song = {}; }
-    var _chartId = variable_struct_exists(_song, "chart_id") ? variable_struct_get(_song, "chart_id") : string(_songId);
+    else if (variable_global_exists("op_vs_custom_server") && global.op_vs_custom_server == 1)
+        return;
+    else if (is_real(_songId) && _songId >= 0 && _songId == floor(_songId))
+    {
+        var _source = _difficulty < 0 && variable_global_exists("shatter_list") ? global.shatter_list
+            : (variable_global_exists("song_list") ? global.song_list : undefined);
+        if (is_array(_source) && _songId < array_length(_source) && is_struct(_source[_songId]))
+            _song = _source[_songId];
+    }
+    if (!is_struct(_song) || (variable_struct_exists(_song, "is_missing") && _song.is_missing)) return;
+    if (_chartId == "") _chartId = string(variable_struct_exists(_song, "chart_id") ? _song.chart_id : _songId);
     var _raw = acs_song_difficulty_name(_song, _difficulty, false);
-    var _key = string("{0}|{1}", _chartId, _raw);
-    if (_key == acs_last_lobby_key) return;
-    acs_last_lobby_key = _key;
+    var _key = string("{0}|{1}|{2}", _chartId, _raw, _difficulty);
+    if (_key == _previousKey && _song == _previousSong)
+    {
+        acs_last_lobby_key = _key;
+        acs_last_lobby_song = _song;
+        return;
+    }
     EmitLobbySelection(_song, _difficulty);
+    acs_last_lobby_key = _key;
+    acs_last_lobby_song = _song;
 };
 
 EmitLobbySelectionFromQueue = function()
 {
     if (!instance_exists(o_st_handle) || !variable_instance_exists(o_st_handle, "songQueue")) return;
     var _queue = o_st_handle.songQueue;
-    if (!is_array(_queue) || array_length(_queue) == 0)
+    if (!is_array(_queue) || array_length(_queue) == 0 || !is_struct(_queue[0]))
     {
         acs_last_lobby_key = "";
+        acs_last_lobby_song = undefined;
         return;
     }
     EmitLobbySelectionFromChoice(_queue[0]);
@@ -671,6 +714,7 @@ EmitStarted = function()
     var _song = struct_get_fallback(global, "currentSongInfo", {});
     var _raw = struct_get_fallback(global, "df_load", "OPENING");
     if (string_length(_raw) == 0) _raw = "OPENING";
+    acs_refresh_tech_stats(_song, _raw);
     acs_last_chart = acs_chart_snapshot(_song, _raw, acs_difficulty_index(_raw));
     acs_last_kind = "ChartStarted";
     acs_set_state("Gameplay");
@@ -684,9 +728,15 @@ EmitLoadingStarted = function()
     var _raw = struct_get_fallback(global, "df_load", "OPENING");
     if (string_length(_raw) == 0) _raw = "OPENING";
     if (is_struct(_song))
+    {
+        acs_refresh_tech_stats(_song, _raw);
         acs_last_chart = acs_chart_snapshot(_song, _raw, acs_difficulty_index(_raw));
+    }
     else if (is_undefined(acs_last_chart))
+    {
+        acs_stats = {};
         acs_last_chart = acs_chart_snapshot({}, _raw, acs_difficulty_index(_raw));
+    }
     acs_last_kind = "ChartLoadingStarted";
     acs_set_state("Loading");
     SendEvent("ChartLoadingStarted", acs_last_chart);

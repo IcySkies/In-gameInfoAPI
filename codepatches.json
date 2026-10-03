@@ -20,23 +20,6 @@
     "Type": 3
   },
   {
-    "Entry": "gml_Object_obj_multiplayer_lobby_Step_0",
-    "ExternalFile": "emit_lobby_selection.gml",
-    "Type": 2
-  },
-  {
-    "Entry": "gml_GlobalScript_AddSongPacket",
-    "Find": "return buffer;",
-    "Value": "if (instance_exists(o_autochartswitch_bridge)) o_autochartswitch_bridge.EmitLobbySelectionFromChoice(arg0);return buffer;",
-    "Type": 1
-  },
-  {
-    "Entry": "gml_GlobalScript_AddSongPacket",
-    "Find": "o_st_handle.songQueue = [arg0];",
-    "Value": "o_st_handle.songQueue = [arg0];if (instance_exists(o_autochartswitch_bridge)) o_autochartswitch_bridge.EmitLobbySelectionFromChoice(arg0);",
-    "Type": 1
-  },
-  {
     "Entry": "gml_Object_o_transitionsong_Create_0",
     "ExternalFile": "emit_loading_started.gml",
     "Type": 2

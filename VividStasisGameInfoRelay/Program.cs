@@ -15,12 +15,17 @@ internal static class Program
         var discoveryDirectory = Path.Combine(gamePath, "AutoChartSwitchV2");
         Directory.CreateDirectory(discoveryDirectory);
         var discoveryPath = Path.Combine(discoveryDirectory, "bridge-relay.json");
+        var sharedDiscoveryPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SVC-AS",
+            "VividStasisGameInfoRelay",
+            "bridge-relay.json");
         var logPath = Path.Combine(discoveryDirectory, "bridge-relay.log");
         using var instance = new Mutex(false, "Local\\VividStasisGameInfoRelay");
         try { if (!instance.WaitOne(0)) return; } catch (AbandonedMutexException) { }
 
         using var stop = new CancellationTokenSource();
-        using var relay = new Relay(gamePort, subscriberPort, discoveryPath, logPath, stop.Token);
+        using var relay = new Relay(gamePort, subscriberPort, [discoveryPath, sharedDiscoveryPath], logPath, stop.Token);
         ApplicationConfiguration.Initialize();
         using var form = new RelayForm(relay, stop);
         form.Shown += (_, _) => _ = RunRelayAsync(relay, form);
@@ -54,7 +59,7 @@ sealed class Relay : IDisposable
     private const int QueueLimit = 64;
     private readonly int _gamePort;
     private readonly int _requestedSubscriberPort;
-    private readonly string _discoveryPath;
+    private readonly IReadOnlyList<string> _discoveryPaths;
     private readonly string _logPath;
     private readonly CancellationToken _cancellationToken;
     private readonly List<byte[]> _journal = [];
@@ -72,11 +77,11 @@ sealed class Relay : IDisposable
     public int SubscriberCount { get { lock (_gate) return _subscribers.Count; } }
     public string Status { get { lock (_gate) return _status; } }
 
-    public Relay(int gamePort, int requestedSubscriberPort, string discoveryPath, string logPath, CancellationToken cancellationToken)
+    public Relay(int gamePort, int requestedSubscriberPort, IReadOnlyList<string> discoveryPaths, string logPath, CancellationToken cancellationToken)
     {
         _gamePort = gamePort;
         _requestedSubscriberPort = requestedSubscriberPort;
-        _discoveryPath = discoveryPath;
+        _discoveryPaths = discoveryPaths;
         _logPath = logPath;
         _cancellationToken = cancellationToken;
     }
@@ -190,10 +195,14 @@ sealed class Relay : IDisposable
             processId = Environment.ProcessId,
             startedAtUtc = DateTimeOffset.UtcNow
         };
-        var temporary = _discoveryPath + ".tmp";
-        await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(data));
-        File.Move(temporary, _discoveryPath, true);
-        Log($"Discovery written to {_discoveryPath}.");
+        foreach (var path in _discoveryPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var temporary = path + ".tmp";
+            await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(data));
+            File.Move(temporary, path, true);
+            Log($"Discovery written to {path}.");
+        }
     }
 
     private void Log(string message)
@@ -209,7 +218,10 @@ sealed class Relay : IDisposable
 
     private void DeleteDiscovery()
     {
-        try { if (File.Exists(_discoveryPath)) File.Delete(_discoveryPath); } catch { }
+        foreach (var path in _discoveryPaths)
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
     }
 
     public void Dispose()
